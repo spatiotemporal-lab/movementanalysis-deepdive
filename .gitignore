@@ -1,0 +1,18 @@
+# Large data files – never push to GitHub
+data/
+
+# Quarto output
+/.quarto/
+*_cache/
+*_files/
+
+# R session artefacts
+.Rhistory
+.RData
+.Rproj.user/
+*.Rproj
+
+# macOS
+.DS_Store
+
+**/*.quarto_ipynb

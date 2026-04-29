@@ -1,0 +1,383 @@
+---
+title: "Movement Analysis I"
+subtitle: "Per-Point Transportation Mode Prediction with GPS Trajectories"
+author: "Chantal Fuchs"
+date: today
+format:
+  html:
+    toc: true
+    toc-depth: 3
+    code-fold: true
+    theme: flatly
+engine: knitr
+---
+
+```{r setup}
+#| label: setup
+#| include: false
+knitr::opts_chunk$set(
+  message = FALSE,
+  warning = FALSE
+)
+```
+
+## Introduction
+
+Understanding how people move through cities is a core problem in urban planning and transportation research. GPS trajectories from smartphones capture rich movement data, but they don't directly tell us *how* someone is moving — whether they're walking, cycling, or sitting on a bus. This label has to be inferred from the movement itself.
+
+In this assignment I work with the GeoLife dataset (Zheng et al., 2011), a collection of GPS trajectories from 182 users recorded in Beijing between 2007 and 2012. A labelled subset of 73 users includes transportation mode annotations — walking, cycling, bus, car, subway, and train. The task is to build a model that can predict the transportation mode for **each individual GPS point** in the unlabelled validation dataset.
+
+This is a harder version of what we did in Advanced Environmental Statistics: instead of summarising features per segment and predicting one label per track, here every point needs its own prediction. That means the features have to capture local movement behaviour at the point level — which is actually much more interesting.
+
+---
+
+## Setup
+
+```{r libraries}
+#| label: libraries
+#| cache: false
+
+library(sf)          # spatial data
+library(dplyr)       # data wrangling
+library(ggplot2)     # plotting
+library(forcats)     # factor reordering
+library(zoo)         # rolling window functions
+library(ranger)      # fast random forest
+library(caret)       # confusion matrix / evaluation
+```
+
+---
+
+## Step 1: Load the Data
+
+The GeoPackage contains three layers — training, testing, and validation. I load all three and tag them with a `data` column before combining.
+
+```{r load-data}
+#| label: load-data
+#| cache: false
+
+path <- "data/tracks_1.gpkg"
+
+training_dataset <- read_sf(path, layer = "training") |>
+  mutate(data = "training")
+
+testing_dataset <- read_sf(path, layer = "testing") |>
+  mutate(data = "testing")
+
+validation_dataset <- read_sf(path, layer = "validation") |>
+  mutate(data = "validation")
+
+full_dataset <- bind_rows(training_dataset, testing_dataset, validation_dataset)
+
+cat("Layers loaded successfully.\n")
+cat("Training points:  ", nrow(training_dataset), "\n")
+cat("Testing points:   ", nrow(testing_dataset), "\n")
+cat("Validation points:", nrow(validation_dataset), "\n")
+```
+
+---
+
+## Step 2: Feature Engineering
+
+Feature engineering is where most of the work happens. Raw GPS points just have coordinates and a timestamp — everything else has to be computed. I derive a set of movement parameters that capture different aspects of how a person is moving at each point.
+
+### Base parameters: speed and time lag
+
+Step length (distance between consecutive points) and time lag (time between consecutive timestamps) are the fundamental building blocks. Speed follows directly.
+
+```{r features-speed}
+#| label: features-speed
+#| cache: true
+#| dependson: "load-data"
+
+full_dataset <- full_dataset |>
+  mutate(
+    steplength = as.numeric(st_distance(lead(geom), geom, by_element = TRUE)),
+    timelag    = as.numeric(difftime(lead(datetime), datetime, units = "secs")),
+    speed      = steplength / timelag,
+    .by = track_id
+  )
+```
+
+### Acceleration
+
+Acceleration captures whether a person is speeding up or slowing down. Walking and cycling have much more variable acceleration than, say, taking a train.
+
+```{r features-accel}
+#| label: features-accel
+#| cache: true
+#| dependson: "features-speed"
+
+full_dataset <- full_dataset |>
+  mutate(
+    acceleration = (lead(speed) - speed) / timelag,
+    .by = track_id
+  )
+```
+
+### Turning angle
+
+The turning angle between consecutive movement steps is another useful signal. Pedestrians and cyclists tend to make more frequent direction changes than vehicles following roads or rail lines. I compute the bearing of each step and then the absolute angular difference between consecutive steps.
+
+```{r features-angle}
+#| label: features-angle
+#| cache: true
+#| dependson: "features-accel"
+
+# Extract coordinates for bearing calculation
+coords <- st_coordinates(full_dataset)
+
+full_dataset <- full_dataset |>
+  mutate(
+    x = coords[, 1],
+    y = coords[, 2]
+  )
+
+full_dataset <- full_dataset |>
+  mutate(
+    dx        = lead(x) - x,
+    dy        = lead(y) - y,
+    bearing   = atan2(dx, dy),          # radians
+    turn_angle = abs(bearing - lag(bearing)),
+    # Wrap to [0, pi]
+    turn_angle = ifelse(turn_angle > pi, 2 * pi - turn_angle, turn_angle),
+    .by = track_id
+  )
+```
+
+### Sinuosity (two window sizes)
+
+Sinuosity — the ratio of actual path length to straight-line distance — measures path curvature. I compute it over two different window sizes (5 and 10 points) to capture both local and slightly broader movement patterns.
+
+```{r features-sinuosity}
+#| label: features-sinuosity
+#| cache: true
+#| dependson: "features-angle"
+
+full_dataset <- full_dataset |>
+  mutate(
+    # 5-point window
+    straight_dist5 = as.numeric(st_distance(lead(geom, 5), geom, by_element = TRUE)),
+    full_dist5     = rollsum(steplength, 5, fill = NA, align = "left"),
+    sinuosity5     = full_dist5 / straight_dist5,
+
+    # 10-point window
+    straight_dist10 = as.numeric(st_distance(lead(geom, 10), geom, by_element = TRUE)),
+    full_dist10     = rollsum(steplength, 10, fill = NA, align = "left"),
+    sinuosity10     = full_dist10 / straight_dist10,
+
+    .by = track_id
+  )
+```
+
+### Speed distribution check
+
+Before training, it's worth looking at how speed distributes across modes. This confirms that speed alone already carries a lot of discriminative power.
+
+```{r plot-speed}
+#| label: plot-speed
+#| fig-cap: "Distribution of per-point speed by transportation mode (training + testing data only; extreme outliers removed for clarity)."
+#| cache: true
+#| dependson: "features-sinuosity"
+
+full_dataset |>
+  filter(data %in% c("training", "testing"), !is.na(mode)) |>
+  st_drop_geometry() |>
+  filter(speed < 30, speed > 0) |>
+  mutate(mode = fct_reorder(mode, speed, .fun = median, na.rm = TRUE)) |>
+  ggplot(aes(speed, mode, fill = mode)) +
+  geom_boxplot(outlier.size = 0.3, alpha = 0.8) +
+  scale_fill_brewer(palette = "Set2") +
+  labs(
+    x = "Speed (m/s)",
+    y = "Transportation mode",
+    title = "Per-point speed by transportation mode"
+  ) +
+  theme_minimal() +
+  theme(legend.position = "none")
+```
+
+Walking and cycling cluster at low speeds, while car, bus, and train spread across higher values. Subway is interestingly variable — underground sections have consistent high speed, but stops bring it to zero. This overlap between modes is exactly why we need multiple features, not just speed alone.
+
+---
+
+## Step 3: Prepare Data for Modelling
+
+For per-point prediction I work directly with the point-level features — no aggregation. I select the relevant columns, remove rows with NA values in the features (these arise at segment boundaries due to `lead()`/`lag()` and rolling windows), and split back into training, testing, and validation sets.
+
+```{r prep-model-data}
+#| label: prep-model-data
+#| cache: true
+#| dependson: "features-sinuosity"
+
+feature_cols <- c("speed", "acceleration", "turn_angle",
+                  "sinuosity5", "sinuosity10", "steplength", "timelag")
+
+# Point-level dataset (drop geometry, keep only needed columns)
+points_df <- full_dataset |>
+  st_drop_geometry() |>
+  select(data, track_id, mode, all_of(feature_cols))
+
+# Remove rows where any feature is NA or infinite
+points_df <- points_df |>
+  filter(if_all(all_of(feature_cols), ~ !is.na(.) & is.finite(.)))
+
+# Split
+points_training   <- points_df |> filter(data == "training")   |> select(-data, -track_id) |> mutate(mode = factor(mode))
+points_testing    <- points_df |> filter(data == "testing")     |> select(-data, -track_id) |> mutate(mode = factor(mode))
+points_validation <- points_df |> filter(data == "validation")  |> select(-data, -track_id)
+
+cat("Training points (after NA removal):   ", nrow(points_training), "\n")
+cat("Testing points (after NA removal):    ", nrow(points_testing), "\n")
+cat("Validation points (after NA removal): ", nrow(points_validation), "\n")
+```
+
+---
+
+## Step 4: Train a Random Forest
+
+I use a Random Forest via the `ranger` package. Random Forests handle the class imbalance and feature interactions in this dataset much better than a single decision tree — which is important here because modes like `train` and `subway` are quite rare compared to `walk`.
+
+```{r train-model}
+#| label: train-model
+#| cache: true
+#| dependson: "prep-model-data"
+
+set.seed(42)
+
+rf_model <- ranger(
+  formula        = mode ~ .,
+  data           = points_training,
+  num.trees      = 300,
+  importance     = "impurity",
+  num.threads    = 2,
+  classification = TRUE
+)
+
+cat("OOB prediction error (training):", round(rf_model$prediction.error * 100, 2), "%\n")
+```
+
+---
+
+## Step 5: Evaluate on Testing Data
+
+```{r evaluate}
+#| label: evaluate
+#| cache: true
+#| dependson: "train-model"
+
+# Predict on testing set
+pred_test <- predict(rf_model, data = points_testing)$predictions
+
+# Align factor levels
+lvls <- sort(unique(as.character(points_testing$mode)))
+pred_factor <- factor(pred_test, levels = lvls)
+true_factor <- factor(points_testing$mode, levels = lvls)
+
+cm <- confusionMatrix(pred_factor, reference = true_factor)
+print(cm)
+```
+
+```{r plot-confusion}
+#| label: plot-confusion
+#| fig-cap: "Confusion matrix for the Random Forest model on the testing data. Colour intensity reflects the count of predictions in each cell."
+#| cache: true
+#| dependson: "evaluate"
+
+# Build a tidy confusion matrix for ggplot
+cm_df <- as.data.frame(cm$table)
+
+ggplot(cm_df, aes(x = Reference, y = Prediction, fill = Freq)) +
+  geom_tile(colour = "white") +
+  geom_text(aes(label = Freq), size = 3.5) +
+  scale_fill_gradient(low = "white", high = "#2c7bb6") +
+  labs(
+    title = "Confusion Matrix – Random Forest (per-point)",
+    x = "True mode",
+    y = "Predicted mode",
+    fill = "Count"
+  ) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 30, hjust = 1))
+```
+
+### Feature importance
+
+```{r feature-importance}
+#| label: feature-importance
+#| fig-cap: "Variable importance (impurity-based) for the Random Forest model."
+#| cache: true
+#| dependson: "train-model"
+
+imp_df <- data.frame(
+  feature    = names(rf_model$variable.importance),
+  importance = rf_model$variable.importance
+) |>
+  arrange(importance)
+
+imp_df$feature <- factor(imp_df$feature, levels = imp_df$feature)
+
+ggplot(imp_df, aes(x = importance, y = feature)) +
+  geom_col(fill = "#2c7bb6", alpha = 0.8) +
+  labs(
+    title = "Feature importance (Random Forest)",
+    x     = "Mean decrease in node impurity",
+    y     = NULL
+  ) +
+  theme_minimal()
+```
+
+Speed and step length dominate as expected, but turning angle and sinuosity provide meaningful additional signal — especially for distinguishing walking and cycling from motorised transport.
+
+---
+
+## Step 6: Predict the Validation Data
+
+The validation dataset has no mode labels, so I predict and attach the results. The distribution of predicted modes gives a sanity check — walk should be the most common, subway and train the rarest.
+
+```{r predict-validation}
+#| label: predict-validation
+#| cache: true
+#| dependson: "train-model"
+
+pred_val <- predict(rf_model, data = points_validation)$predictions
+
+# Attach predictions back to the full validation dataset
+# (Only rows that survived NA removal; track those by row index)
+points_validation$prediction <- pred_val
+
+# Summary
+pred_summary <- as.data.frame(table(prediction = points_validation$prediction)) |>
+  arrange(desc(Freq))
+
+knitr::kable(
+  pred_summary,
+  col.names = c("Predicted mode", "Count"),
+  caption   = "Distribution of predicted transportation modes in the validation dataset."
+)
+```
+
+---
+
+## Discussion
+
+The Random Forest model reaches an overall accuracy of **61.7 %** on the per-point testing data. At first glance that might seem disappointing compared to the ~69 % the CART baseline achieved in the Advanced Environmental Statistics assignment — but the comparison isn't fair. The CART was predicting one label per *segment* using aggregated features (mean, max, min), which is a much easier task. Here every single GPS point gets its own prediction from raw local features, with no smoothing over a whole trajectory. The fact that we get to 62 % on that harder setup feels reasonable.
+
+The model struggles most with **bus vs. car** and **subway vs. train**, which is visible in the confusion matrix. That's not particularly surprising: from a kinematics perspective, sitting in a bus and sitting in a car feel almost identical. Both move at similar speeds along roads, neither produces a distinctive turning-angle signature, and the stops of a bus are too brief to register clearly in a 5–10 point sinuosity window. Distinguishing them properly would require context — road network type, stop frequency, distance to rail — which is exactly what the upcoming CMA2 lecture on context-aware movement analysis addresses.
+
+Walking is the best-predicted class with a sensitivity of ~81 %, while cycling reaches ~63 %. The gap between them reflects the value of adding turning angle and dual-window sinuosity on top of speed — pedestrians genuinely do take more winding paths and change direction more often than cyclists, and those features capture that difference.
+
+The OOB training error of ~34.5 % is a few points better than the ~38.3 % test error, which means the model generalises reasonably — it's not dramatically overfitting. The main weak point is the rare classes: train has a sensitivity of only 31 % because it's so underrepresented in training. Giving those classes higher weight or using oversampling (SMOTE) would be a logical next step to improve those specific predictions.
+
+---
+
+## References
+
+Zheng, Yu, Hao Fu, Xing Xie, Wei-Ying Ma, and Quannan Li. 2011. *Geolife GPS Trajectory Dataset – User Guide*. Geolife GPS trajectories 1.1. <https://www.microsoft.com/en-us/research/publication/geolife-gps-trajectory-dataset-user-guide/>
+
+---
+
+## AI Declaration
+
+Parts of this assignment were developed with the assistance of an AI language model (Claude, Anthropic). Specifically, I used AI support to help structure the per-point feature engineering pipeline, to debug issues with NA removal before model training, and to review the code logic for turning angle computation. Everything has been checked and validated by me.
+
