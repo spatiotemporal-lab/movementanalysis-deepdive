@@ -133,6 +133,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
   </ul></li>
   <li><a href="#step-3-prepare-data-for-modelling" id="toc-step-3-prepare-data-for-modelling" class="nav-link" data-scroll-target="#step-3-prepare-data-for-modelling">Step 3: Prepare Data for Modelling</a></li>
   <li><a href="#step-4-train-a-random-forest" id="toc-step-4-train-a-random-forest" class="nav-link" data-scroll-target="#step-4-train-a-random-forest">Step 4: Train a Random Forest</a></li>
+  <li><a href="#step-4b-cart-for-comparison" id="toc-step-4b-cart-for-comparison" class="nav-link" data-scroll-target="#step-4b-cart-for-comparison">Step 4b: CART for Comparison</a></li>
   <li><a href="#step-5-evaluate-on-testing-data" id="toc-step-5-evaluate-on-testing-data" class="nav-link" data-scroll-target="#step-5-evaluate-on-testing-data">Step 5: Evaluate on Testing Data</a>
   <ul class="collapse">
   <li><a href="#feature-importance" id="toc-feature-importance" class="nav-link" data-scroll-target="#feature-importance">Feature importance</a></li>
@@ -387,7 +388,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <span id="cb15-10"><a href="#cb15-10" aria-hidden="true" tabindex="-1"></a>points_df <span class="ot">&lt;-</span> points_df <span class="sc">|&gt;</span></span>
 <span id="cb15-11"><a href="#cb15-11" aria-hidden="true" tabindex="-1"></a>  <span class="fu">filter</span>(<span class="fu">if_all</span>(<span class="fu">all_of</span>(feature_cols), <span class="sc">~</span> <span class="sc">!</span><span class="fu">is.na</span>(.) <span class="sc">&amp;</span> <span class="fu">is.finite</span>(.)))</span>
 <span id="cb15-12"><a href="#cb15-12" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb15-13"><a href="#cb15-13" aria-hidden="true" tabindex="-1"></a><span class="co"># Split</span></span>
+<span id="cb15-13"><a href="#cb15-13" aria-hidden="true" tabindex="-1"></a><span class="co"># Split (NA-removed versions for training/testing)</span></span>
 <span id="cb15-14"><a href="#cb15-14" aria-hidden="true" tabindex="-1"></a>points_training   <span class="ot">&lt;-</span> points_df <span class="sc">|&gt;</span> <span class="fu">filter</span>(data <span class="sc">==</span> <span class="st">"training"</span>)   <span class="sc">|&gt;</span> <span class="fu">select</span>(<span class="sc">-</span>data, <span class="sc">-</span>track_id) <span class="sc">|&gt;</span> <span class="fu">mutate</span>(<span class="at">mode =</span> <span class="fu">factor</span>(mode))</span>
 <span id="cb15-15"><a href="#cb15-15" aria-hidden="true" tabindex="-1"></a>points_testing    <span class="ot">&lt;-</span> points_df <span class="sc">|&gt;</span> <span class="fu">filter</span>(data <span class="sc">==</span> <span class="st">"testing"</span>)     <span class="sc">|&gt;</span> <span class="fu">select</span>(<span class="sc">-</span>data, <span class="sc">-</span>track_id) <span class="sc">|&gt;</span> <span class="fu">mutate</span>(<span class="at">mode =</span> <span class="fu">factor</span>(mode))</span>
 <span id="cb15-16"><a href="#cb15-16" aria-hidden="true" tabindex="-1"></a>points_validation <span class="ot">&lt;-</span> points_df <span class="sc">|&gt;</span> <span class="fu">filter</span>(data <span class="sc">==</span> <span class="st">"validation"</span>)  <span class="sc">|&gt;</span> <span class="fu">select</span>(<span class="sc">-</span>data, <span class="sc">-</span>track_id)</span>
@@ -411,6 +412,27 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <div class="cell-output cell-output-stdout">
 <pre><code>Validation points (after NA removal):  178034 </code></pre>
 </div>
+<details class="code-fold">
+<summary>Code</summary>
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb21"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb21-1"><a href="#cb21-1" aria-hidden="true" tabindex="-1"></a><span class="co"># For validation: keep ALL 240k points by imputing boundary NAs with</span></span>
+<span id="cb21-2"><a href="#cb21-2" aria-hidden="true" tabindex="-1"></a><span class="co"># training medians — standard practice for segment-boundary artefacts.</span></span>
+<span id="cb21-3"><a href="#cb21-3" aria-hidden="true" tabindex="-1"></a>train_medians <span class="ot">&lt;-</span> points_training <span class="sc">|&gt;</span></span>
+<span id="cb21-4"><a href="#cb21-4" aria-hidden="true" tabindex="-1"></a>  <span class="fu">summarise</span>(<span class="fu">across</span>(<span class="fu">all_of</span>(feature_cols), \(x) <span class="fu">median</span>(x, <span class="at">na.rm =</span> <span class="cn">TRUE</span>)))</span>
+<span id="cb21-5"><a href="#cb21-5" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb21-6"><a href="#cb21-6" aria-hidden="true" tabindex="-1"></a>points_validation_full <span class="ot">&lt;-</span> full_dataset <span class="sc">|&gt;</span></span>
+<span id="cb21-7"><a href="#cb21-7" aria-hidden="true" tabindex="-1"></a>  <span class="fu">filter</span>(data <span class="sc">==</span> <span class="st">"validation"</span>) <span class="sc">|&gt;</span></span>
+<span id="cb21-8"><a href="#cb21-8" aria-hidden="true" tabindex="-1"></a>  <span class="fu">st_drop_geometry</span>() <span class="sc">|&gt;</span></span>
+<span id="cb21-9"><a href="#cb21-9" aria-hidden="true" tabindex="-1"></a>  <span class="fu">select</span>(<span class="fu">all_of</span>(feature_cols)) <span class="sc">|&gt;</span></span>
+<span id="cb21-10"><a href="#cb21-10" aria-hidden="true" tabindex="-1"></a>  <span class="fu">mutate</span>(<span class="fu">across</span>(<span class="fu">all_of</span>(feature_cols), \(x) {</span>
+<span id="cb21-11"><a href="#cb21-11" aria-hidden="true" tabindex="-1"></a>    m <span class="ot">&lt;-</span> train_medians[[<span class="fu">cur_column</span>()]]</span>
+<span id="cb21-12"><a href="#cb21-12" aria-hidden="true" tabindex="-1"></a>    <span class="fu">ifelse</span>(<span class="fu">is.na</span>(x) <span class="sc">|</span> <span class="sc">!</span><span class="fu">is.finite</span>(x), m, x)</span>
+<span id="cb21-13"><a href="#cb21-13" aria-hidden="true" tabindex="-1"></a>  }))</span>
+<span id="cb21-14"><a href="#cb21-14" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb21-15"><a href="#cb21-15" aria-hidden="true" tabindex="-1"></a><span class="fu">cat</span>(<span class="st">"Validation points (full, imputed):    "</span>, <span class="fu">nrow</span>(points_validation_full), <span class="st">"</span><span class="sc">\n</span><span class="st">"</span>)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+</details>
+<div class="cell-output cell-output-stdout">
+<pre><code>Validation points (full, imputed):     240449 </code></pre>
+</div>
 </div>
 <hr>
 </section>
@@ -420,35 +442,35 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <div class="cell">
 <details class="code-fold">
 <summary>Code</summary>
-<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb21"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb21-1"><a href="#cb21-1" aria-hidden="true" tabindex="-1"></a><span class="fu">set.seed</span>(<span class="dv">42</span>)</span>
-<span id="cb21-2"><a href="#cb21-2" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb21-3"><a href="#cb21-3" aria-hidden="true" tabindex="-1"></a>rf_model <span class="ot">&lt;-</span> <span class="fu">ranger</span>(</span>
-<span id="cb21-4"><a href="#cb21-4" aria-hidden="true" tabindex="-1"></a>  <span class="at">formula        =</span> mode <span class="sc">~</span> .,</span>
-<span id="cb21-5"><a href="#cb21-5" aria-hidden="true" tabindex="-1"></a>  <span class="at">data           =</span> points_training,</span>
-<span id="cb21-6"><a href="#cb21-6" aria-hidden="true" tabindex="-1"></a>  <span class="at">num.trees      =</span> <span class="dv">300</span>,</span>
-<span id="cb21-7"><a href="#cb21-7" aria-hidden="true" tabindex="-1"></a>  <span class="at">importance     =</span> <span class="st">"impurity"</span>,</span>
-<span id="cb21-8"><a href="#cb21-8" aria-hidden="true" tabindex="-1"></a>  <span class="at">num.threads    =</span> <span class="dv">2</span>,</span>
-<span id="cb21-9"><a href="#cb21-9" aria-hidden="true" tabindex="-1"></a>  <span class="at">classification =</span> <span class="cn">TRUE</span></span>
-<span id="cb21-10"><a href="#cb21-10" aria-hidden="true" tabindex="-1"></a>)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb23"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb23-1"><a href="#cb23-1" aria-hidden="true" tabindex="-1"></a><span class="fu">set.seed</span>(<span class="dv">42</span>)</span>
+<span id="cb23-2"><a href="#cb23-2" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb23-3"><a href="#cb23-3" aria-hidden="true" tabindex="-1"></a>rf_model <span class="ot">&lt;-</span> <span class="fu">ranger</span>(</span>
+<span id="cb23-4"><a href="#cb23-4" aria-hidden="true" tabindex="-1"></a>  <span class="at">formula        =</span> mode <span class="sc">~</span> .,</span>
+<span id="cb23-5"><a href="#cb23-5" aria-hidden="true" tabindex="-1"></a>  <span class="at">data           =</span> points_training,</span>
+<span id="cb23-6"><a href="#cb23-6" aria-hidden="true" tabindex="-1"></a>  <span class="at">num.trees      =</span> <span class="dv">300</span>,</span>
+<span id="cb23-7"><a href="#cb23-7" aria-hidden="true" tabindex="-1"></a>  <span class="at">importance     =</span> <span class="st">"impurity"</span>,</span>
+<span id="cb23-8"><a href="#cb23-8" aria-hidden="true" tabindex="-1"></a>  <span class="at">num.threads    =</span> <span class="dv">2</span>,</span>
+<span id="cb23-9"><a href="#cb23-9" aria-hidden="true" tabindex="-1"></a>  <span class="at">classification =</span> <span class="cn">TRUE</span></span>
+<span id="cb23-10"><a href="#cb23-10" aria-hidden="true" tabindex="-1"></a>)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 </details>
 <div class="cell-output cell-output-stdout">
-<pre><code>Growing trees.. Progress: 8%. Estimated remaining time: 6 minutes, 25 seconds.
-Growing trees.. Progress: 16%. Estimated remaining time: 5 minutes, 49 seconds.
-Growing trees.. Progress: 23%. Estimated remaining time: 5 minutes, 28 seconds.
-Growing trees.. Progress: 32%. Estimated remaining time: 4 minutes, 40 seconds.
-Growing trees.. Progress: 40%. Estimated remaining time: 3 minutes, 59 seconds.
-Growing trees.. Progress: 48%. Estimated remaining time: 3 minutes, 27 seconds.
-Growing trees.. Progress: 57%. Estimated remaining time: 2 minutes, 51 seconds.
-Growing trees.. Progress: 64%. Estimated remaining time: 2 minutes, 23 seconds.
-Growing trees.. Progress: 72%. Estimated remaining time: 1 minute, 51 seconds.
-Growing trees.. Progress: 78%. Estimated remaining time: 1 minute, 30 seconds.
-Growing trees.. Progress: 84%. Estimated remaining time: 1 minute, 6 seconds.
-Growing trees.. Progress: 90%. Estimated remaining time: 44 seconds.
-Growing trees.. Progress: 96%. Estimated remaining time: 19 seconds.</code></pre>
+<pre><code>Growing trees.. Progress: 10%. Estimated remaining time: 4 minutes, 37 seconds.
+Growing trees.. Progress: 17%. Estimated remaining time: 5 minutes, 17 seconds.
+Growing trees.. Progress: 26%. Estimated remaining time: 4 minutes, 36 seconds.
+Growing trees.. Progress: 34%. Estimated remaining time: 4 minutes, 12 seconds.
+Growing trees.. Progress: 42%. Estimated remaining time: 3 minutes, 42 seconds.
+Growing trees.. Progress: 49%. Estimated remaining time: 3 minutes, 15 seconds.
+Growing trees.. Progress: 59%. Estimated remaining time: 2 minutes, 34 seconds.
+Growing trees.. Progress: 66%. Estimated remaining time: 2 minutes, 9 seconds.
+Growing trees.. Progress: 73%. Estimated remaining time: 1 minute, 46 seconds.
+Growing trees.. Progress: 78%. Estimated remaining time: 1 minute, 29 seconds.
+Growing trees.. Progress: 86%. Estimated remaining time: 56 seconds.
+Growing trees.. Progress: 92%. Estimated remaining time: 35 seconds.
+Growing trees.. Progress: 96%. Estimated remaining time: 16 seconds.</code></pre>
 </div>
 <details class="code-fold">
 <summary>Code</summary>
-<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb23"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb23-1"><a href="#cb23-1" aria-hidden="true" tabindex="-1"></a><span class="fu">cat</span>(<span class="st">"OOB prediction error (training):"</span>, <span class="fu">round</span>(rf_model<span class="sc">$</span>prediction.error <span class="sc">*</span> <span class="dv">100</span>, <span class="dv">2</span>), <span class="st">"%</span><span class="sc">\n</span><span class="st">"</span>)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb25"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb25-1"><a href="#cb25-1" aria-hidden="true" tabindex="-1"></a><span class="fu">cat</span>(<span class="st">"OOB prediction error (training):"</span>, <span class="fu">round</span>(rf_model<span class="sc">$</span>prediction.error <span class="sc">*</span> <span class="dv">100</span>, <span class="dv">2</span>), <span class="st">"%</span><span class="sc">\n</span><span class="st">"</span>)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 </details>
 <div class="cell-output cell-output-stdout">
 <pre><code>OOB prediction error (training): 34.52 %</code></pre>
@@ -456,33 +478,109 @@ Growing trees.. Progress: 96%. Estimated remaining time: 19 seconds.</code></pre
 </div>
 <hr>
 </section>
+<section id="step-4b-cart-for-comparison" class="level2">
+<h2 class="anchored" data-anchor-id="step-4b-cart-for-comparison">Step 4b: CART for Comparison</h2>
+<p>To see how much the Random Forest actually gains over a single tree, I train a CART model on exactly the same per-point features and evaluate it on the same testing data.</p>
+<div class="cell">
+<details class="code-fold">
+<summary>Code</summary>
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb27"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb27-1"><a href="#cb27-1" aria-hidden="true" tabindex="-1"></a><span class="fu">library</span>(rpart)</span>
+<span id="cb27-2"><a href="#cb27-2" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb27-3"><a href="#cb27-3" aria-hidden="true" tabindex="-1"></a>cart_model <span class="ot">&lt;-</span> <span class="fu">rpart</span>(</span>
+<span id="cb27-4"><a href="#cb27-4" aria-hidden="true" tabindex="-1"></a>  mode <span class="sc">~</span> .,</span>
+<span id="cb27-5"><a href="#cb27-5" aria-hidden="true" tabindex="-1"></a>  <span class="at">data   =</span> points_training,</span>
+<span id="cb27-6"><a href="#cb27-6" aria-hidden="true" tabindex="-1"></a>  <span class="at">method =</span> <span class="st">"class"</span></span>
+<span id="cb27-7"><a href="#cb27-7" aria-hidden="true" tabindex="-1"></a>)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+</details>
+</div>
+<div class="cell">
+<details class="code-fold">
+<summary>Code</summary>
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb28"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb28-1"><a href="#cb28-1" aria-hidden="true" tabindex="-1"></a><span class="co"># CART predictions on testing set</span></span>
+<span id="cb28-2"><a href="#cb28-2" aria-hidden="true" tabindex="-1"></a>pred_cart   <span class="ot">&lt;-</span> <span class="fu">predict</span>(cart_model, <span class="at">newdata =</span> points_testing, <span class="at">type =</span> <span class="st">"class"</span>)</span>
+<span id="cb28-3"><a href="#cb28-3" aria-hidden="true" tabindex="-1"></a>lvls_c      <span class="ot">&lt;-</span> <span class="fu">sort</span>(<span class="fu">unique</span>(<span class="fu">as.character</span>(points_testing<span class="sc">$</span>mode)))</span>
+<span id="cb28-4"><a href="#cb28-4" aria-hidden="true" tabindex="-1"></a>cm_cart     <span class="ot">&lt;-</span> <span class="fu">confusionMatrix</span>(<span class="fu">factor</span>(pred_cart, <span class="at">levels =</span> lvls_c),</span>
+<span id="cb28-5"><a href="#cb28-5" aria-hidden="true" tabindex="-1"></a>                               <span class="at">reference =</span> <span class="fu">factor</span>(points_testing<span class="sc">$</span>mode, <span class="at">levels =</span> lvls_c))</span>
+<span id="cb28-6"><a href="#cb28-6" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb28-7"><a href="#cb28-7" aria-hidden="true" tabindex="-1"></a><span class="co"># RF predictions on testing set (computed here for the comparison table)</span></span>
+<span id="cb28-8"><a href="#cb28-8" aria-hidden="true" tabindex="-1"></a>pred_rf_cmp <span class="ot">&lt;-</span> <span class="fu">predict</span>(rf_model, <span class="at">data =</span> points_testing)<span class="sc">$</span>predictions</span>
+<span id="cb28-9"><a href="#cb28-9" aria-hidden="true" tabindex="-1"></a>cm_rf_cmp   <span class="ot">&lt;-</span> <span class="fu">confusionMatrix</span>(<span class="fu">factor</span>(pred_rf_cmp, <span class="at">levels =</span> lvls_c),</span>
+<span id="cb28-10"><a href="#cb28-10" aria-hidden="true" tabindex="-1"></a>                               <span class="at">reference =</span> <span class="fu">factor</span>(points_testing<span class="sc">$</span>mode, <span class="at">levels =</span> lvls_c))</span>
+<span id="cb28-11"><a href="#cb28-11" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb28-12"><a href="#cb28-12" aria-hidden="true" tabindex="-1"></a><span class="co"># Side-by-side comparison</span></span>
+<span id="cb28-13"><a href="#cb28-13" aria-hidden="true" tabindex="-1"></a>comparison <span class="ot">&lt;-</span> <span class="fu">data.frame</span>(</span>
+<span id="cb28-14"><a href="#cb28-14" aria-hidden="true" tabindex="-1"></a>  <span class="at">Model    =</span> <span class="fu">c</span>(<span class="st">"CART (single tree)"</span>, <span class="st">"Random Forest (300 trees)"</span>),</span>
+<span id="cb28-15"><a href="#cb28-15" aria-hidden="true" tabindex="-1"></a>  <span class="at">Accuracy =</span> <span class="fu">c</span>(</span>
+<span id="cb28-16"><a href="#cb28-16" aria-hidden="true" tabindex="-1"></a>    <span class="fu">round</span>(cm_cart<span class="sc">$</span>overall[<span class="st">"Accuracy"</span>] <span class="sc">*</span> <span class="dv">100</span>, <span class="dv">2</span>),</span>
+<span id="cb28-17"><a href="#cb28-17" aria-hidden="true" tabindex="-1"></a>    <span class="fu">round</span>(cm_rf_cmp<span class="sc">$</span>overall[<span class="st">"Accuracy"</span>] <span class="sc">*</span> <span class="dv">100</span>, <span class="dv">2</span>)</span>
+<span id="cb28-18"><a href="#cb28-18" aria-hidden="true" tabindex="-1"></a>  ),</span>
+<span id="cb28-19"><a href="#cb28-19" aria-hidden="true" tabindex="-1"></a>  <span class="at">Kappa =</span> <span class="fu">c</span>(</span>
+<span id="cb28-20"><a href="#cb28-20" aria-hidden="true" tabindex="-1"></a>    <span class="fu">round</span>(cm_cart<span class="sc">$</span>overall[<span class="st">"Kappa"</span>], <span class="dv">3</span>),</span>
+<span id="cb28-21"><a href="#cb28-21" aria-hidden="true" tabindex="-1"></a>    <span class="fu">round</span>(cm_rf_cmp<span class="sc">$</span>overall[<span class="st">"Kappa"</span>], <span class="dv">3</span>)</span>
+<span id="cb28-22"><a href="#cb28-22" aria-hidden="true" tabindex="-1"></a>  )</span>
+<span id="cb28-23"><a href="#cb28-23" aria-hidden="true" tabindex="-1"></a>)</span>
+<span id="cb28-24"><a href="#cb28-24" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb28-25"><a href="#cb28-25" aria-hidden="true" tabindex="-1"></a>knitr<span class="sc">::</span><span class="fu">kable</span>(</span>
+<span id="cb28-26"><a href="#cb28-26" aria-hidden="true" tabindex="-1"></a>  comparison,</span>
+<span id="cb28-27"><a href="#cb28-27" aria-hidden="true" tabindex="-1"></a>  <span class="at">col.names =</span> <span class="fu">c</span>(<span class="st">"Model"</span>, <span class="st">"Accuracy (%)"</span>, <span class="st">"Kappa"</span>),</span>
+<span id="cb28-28"><a href="#cb28-28" aria-hidden="true" tabindex="-1"></a>  <span class="at">caption   =</span> <span class="st">"Accuracy comparison: CART vs. Random Forest on per-point testing data."</span></span>
+<span id="cb28-29"><a href="#cb28-29" aria-hidden="true" tabindex="-1"></a>)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+</details>
+<div class="cell-output-display">
+<table class="caption-top table table-sm table-striped small">
+<caption>Accuracy comparison: CART vs.&nbsp;Random Forest on per-point testing data.</caption>
+<thead>
+<tr class="header">
+<th style="text-align: left;">Model</th>
+<th style="text-align: right;">Accuracy (%)</th>
+<th style="text-align: right;">Kappa</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td style="text-align: left;">CART (single tree)</td>
+<td style="text-align: right;">54.22</td>
+<td style="text-align: right;">0.392</td>
+</tr>
+<tr class="even">
+<td style="text-align: left;">Random Forest (300 trees)</td>
+<td style="text-align: right;">61.71</td>
+<td style="text-align: right;">0.490</td>
+</tr>
+</tbody>
+</table>
+</div>
+</div>
+<p>The Random Forest clearly outperforms the single CART on both metrics. The gap is particularly visible for rare classes — the ensemble averaging in a Random Forest stabilises predictions for underrepresented modes like <code>train</code> and <code>subway</code>.</p>
+<hr>
+</section>
 <section id="step-5-evaluate-on-testing-data" class="level2">
 <h2 class="anchored" data-anchor-id="step-5-evaluate-on-testing-data">Step 5: Evaluate on Testing Data</h2>
 <div class="cell">
 <details class="code-fold">
 <summary>Code</summary>
-<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb25"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb25-1"><a href="#cb25-1" aria-hidden="true" tabindex="-1"></a><span class="co"># Predict on testing set</span></span>
-<span id="cb25-2"><a href="#cb25-2" aria-hidden="true" tabindex="-1"></a>pred_test <span class="ot">&lt;-</span> <span class="fu">predict</span>(rf_model, <span class="at">data =</span> points_testing)<span class="sc">$</span>predictions</span>
-<span id="cb25-3"><a href="#cb25-3" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb25-4"><a href="#cb25-4" aria-hidden="true" tabindex="-1"></a><span class="co"># Align factor levels</span></span>
-<span id="cb25-5"><a href="#cb25-5" aria-hidden="true" tabindex="-1"></a>lvls <span class="ot">&lt;-</span> <span class="fu">sort</span>(<span class="fu">unique</span>(<span class="fu">as.character</span>(points_testing<span class="sc">$</span>mode)))</span>
-<span id="cb25-6"><a href="#cb25-6" aria-hidden="true" tabindex="-1"></a>pred_factor <span class="ot">&lt;-</span> <span class="fu">factor</span>(pred_test, <span class="at">levels =</span> lvls)</span>
-<span id="cb25-7"><a href="#cb25-7" aria-hidden="true" tabindex="-1"></a>true_factor <span class="ot">&lt;-</span> <span class="fu">factor</span>(points_testing<span class="sc">$</span>mode, <span class="at">levels =</span> lvls)</span>
-<span id="cb25-8"><a href="#cb25-8" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb25-9"><a href="#cb25-9" aria-hidden="true" tabindex="-1"></a>cm <span class="ot">&lt;-</span> <span class="fu">confusionMatrix</span>(pred_factor, <span class="at">reference =</span> true_factor)</span>
-<span id="cb25-10"><a href="#cb25-10" aria-hidden="true" tabindex="-1"></a><span class="fu">print</span>(cm)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb29"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb29-1"><a href="#cb29-1" aria-hidden="true" tabindex="-1"></a><span class="co"># Predict on testing set</span></span>
+<span id="cb29-2"><a href="#cb29-2" aria-hidden="true" tabindex="-1"></a>pred_test <span class="ot">&lt;-</span> <span class="fu">predict</span>(rf_model, <span class="at">data =</span> points_testing)<span class="sc">$</span>predictions</span>
+<span id="cb29-3"><a href="#cb29-3" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb29-4"><a href="#cb29-4" aria-hidden="true" tabindex="-1"></a><span class="co"># Align factor levels</span></span>
+<span id="cb29-5"><a href="#cb29-5" aria-hidden="true" tabindex="-1"></a>lvls <span class="ot">&lt;-</span> <span class="fu">sort</span>(<span class="fu">unique</span>(<span class="fu">as.character</span>(points_testing<span class="sc">$</span>mode)))</span>
+<span id="cb29-6"><a href="#cb29-6" aria-hidden="true" tabindex="-1"></a>pred_factor <span class="ot">&lt;-</span> <span class="fu">factor</span>(pred_test, <span class="at">levels =</span> lvls)</span>
+<span id="cb29-7"><a href="#cb29-7" aria-hidden="true" tabindex="-1"></a>true_factor <span class="ot">&lt;-</span> <span class="fu">factor</span>(points_testing<span class="sc">$</span>mode, <span class="at">levels =</span> lvls)</span>
+<span id="cb29-8"><a href="#cb29-8" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb29-9"><a href="#cb29-9" aria-hidden="true" tabindex="-1"></a>cm <span class="ot">&lt;-</span> <span class="fu">confusionMatrix</span>(pred_factor, <span class="at">reference =</span> true_factor)</span>
+<span id="cb29-10"><a href="#cb29-10" aria-hidden="true" tabindex="-1"></a><span class="fu">print</span>(cm)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 </details>
 <div class="cell-output cell-output-stdout">
 <pre><code>Confusion Matrix and Statistics
 
           Reference
 Prediction  bike   bus   car subway train  walk
-    bike   26976  7345  2340    268   158  4543
-    bus     6182 41638 10929   2473   869  5317
-    car      238  3120 10613   1133   243   286
-    subway    20   261  1755   6129   730   162
-    train      0     5   119    232   931     0
-    walk    9504 16255  3842   2792    95 44626
+    bike   26978  7347  2333    268   158  4543
+    bus     6185 41635 10934   2470   870  5322
+    car      236  3134 10611   1130   241   287
+    subway    21   259  1758   6139   731   165
+    train      0     5   121    231   931     0
+    walk    9500 16244  3841   2789    95 44617
 
 Overall Statistics
                                           
@@ -498,43 +596,43 @@ Overall Statistics
 Statistics by Class:
 
                      Class: bike Class: bus Class: car Class: subway
-Sensitivity               0.6285     0.6068    0.35857       0.47048
-Specificity               0.9134     0.8204    0.97250       0.98529
-Pos Pred Value            0.6480     0.6177    0.67888       0.67671
-Neg Pred Value            0.9065     0.8135    0.90338       0.96603
+Sensitivity               0.6286     0.6067    0.35850       0.47125
+Specificity               0.9134     0.8203    0.97245       0.98526
+Pos Pred Value            0.6481     0.6176    0.67850       0.67662
+Neg Pred Value            0.9065     0.8135    0.90337       0.96608
 Prevalence                0.2023     0.3235    0.13953       0.06141
-Detection Rate            0.1272     0.1963    0.05003       0.02889
-Detection Prevalence      0.1962     0.3178    0.07370       0.04270
-Balanced Accuracy         0.7710     0.7136    0.66553       0.72789
+Detection Rate            0.1272     0.1963    0.05002       0.02894
+Detection Prevalence      0.1962     0.3178    0.07372       0.04277
+Balanced Accuracy         0.7710     0.7135    0.66548       0.72826
                      Class: train Class: walk
-Sensitivity              0.307667      0.8124
-Specificity              0.998297      0.7933
-Pos Pred Value           0.723388      0.5787
-Neg Pred Value           0.990064      0.9237
+Sensitivity              0.307667      0.8122
+Specificity              0.998293      0.7934
+Pos Pred Value           0.722826      0.5788
+Neg Pred Value           0.990064      0.9236
 Prevalence               0.014265      0.2590
-Detection Rate           0.004389      0.2104
-Detection Prevalence     0.006067      0.3635
-Balanced Accuracy        0.652982      0.8028</code></pre>
+Detection Rate           0.004389      0.2103
+Detection Prevalence     0.006072      0.3634
+Balanced Accuracy        0.652980      0.8028</code></pre>
 </div>
 </div>
 <div class="cell">
 <details class="code-fold">
 <summary>Code</summary>
-<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb27"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb27-1"><a href="#cb27-1" aria-hidden="true" tabindex="-1"></a><span class="co"># Build a tidy confusion matrix for ggplot</span></span>
-<span id="cb27-2"><a href="#cb27-2" aria-hidden="true" tabindex="-1"></a>cm_df <span class="ot">&lt;-</span> <span class="fu">as.data.frame</span>(cm<span class="sc">$</span>table)</span>
-<span id="cb27-3"><a href="#cb27-3" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb27-4"><a href="#cb27-4" aria-hidden="true" tabindex="-1"></a><span class="fu">ggplot</span>(cm_df, <span class="fu">aes</span>(<span class="at">x =</span> Reference, <span class="at">y =</span> Prediction, <span class="at">fill =</span> Freq)) <span class="sc">+</span></span>
-<span id="cb27-5"><a href="#cb27-5" aria-hidden="true" tabindex="-1"></a>  <span class="fu">geom_tile</span>(<span class="at">colour =</span> <span class="st">"white"</span>) <span class="sc">+</span></span>
-<span id="cb27-6"><a href="#cb27-6" aria-hidden="true" tabindex="-1"></a>  <span class="fu">geom_text</span>(<span class="fu">aes</span>(<span class="at">label =</span> Freq), <span class="at">size =</span> <span class="fl">3.5</span>) <span class="sc">+</span></span>
-<span id="cb27-7"><a href="#cb27-7" aria-hidden="true" tabindex="-1"></a>  <span class="fu">scale_fill_gradient</span>(<span class="at">low =</span> <span class="st">"white"</span>, <span class="at">high =</span> <span class="st">"#2c7bb6"</span>) <span class="sc">+</span></span>
-<span id="cb27-8"><a href="#cb27-8" aria-hidden="true" tabindex="-1"></a>  <span class="fu">labs</span>(</span>
-<span id="cb27-9"><a href="#cb27-9" aria-hidden="true" tabindex="-1"></a>    <span class="at">title =</span> <span class="st">"Confusion Matrix – Random Forest (per-point)"</span>,</span>
-<span id="cb27-10"><a href="#cb27-10" aria-hidden="true" tabindex="-1"></a>    <span class="at">x =</span> <span class="st">"True mode"</span>,</span>
-<span id="cb27-11"><a href="#cb27-11" aria-hidden="true" tabindex="-1"></a>    <span class="at">y =</span> <span class="st">"Predicted mode"</span>,</span>
-<span id="cb27-12"><a href="#cb27-12" aria-hidden="true" tabindex="-1"></a>    <span class="at">fill =</span> <span class="st">"Count"</span></span>
-<span id="cb27-13"><a href="#cb27-13" aria-hidden="true" tabindex="-1"></a>  ) <span class="sc">+</span></span>
-<span id="cb27-14"><a href="#cb27-14" aria-hidden="true" tabindex="-1"></a>  <span class="fu">theme_minimal</span>() <span class="sc">+</span></span>
-<span id="cb27-15"><a href="#cb27-15" aria-hidden="true" tabindex="-1"></a>  <span class="fu">theme</span>(<span class="at">axis.text.x =</span> <span class="fu">element_text</span>(<span class="at">angle =</span> <span class="dv">30</span>, <span class="at">hjust =</span> <span class="dv">1</span>))</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb31"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb31-1"><a href="#cb31-1" aria-hidden="true" tabindex="-1"></a><span class="co"># Build a tidy confusion matrix for ggplot</span></span>
+<span id="cb31-2"><a href="#cb31-2" aria-hidden="true" tabindex="-1"></a>cm_df <span class="ot">&lt;-</span> <span class="fu">as.data.frame</span>(cm<span class="sc">$</span>table)</span>
+<span id="cb31-3"><a href="#cb31-3" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb31-4"><a href="#cb31-4" aria-hidden="true" tabindex="-1"></a><span class="fu">ggplot</span>(cm_df, <span class="fu">aes</span>(<span class="at">x =</span> Reference, <span class="at">y =</span> Prediction, <span class="at">fill =</span> Freq)) <span class="sc">+</span></span>
+<span id="cb31-5"><a href="#cb31-5" aria-hidden="true" tabindex="-1"></a>  <span class="fu">geom_tile</span>(<span class="at">colour =</span> <span class="st">"white"</span>) <span class="sc">+</span></span>
+<span id="cb31-6"><a href="#cb31-6" aria-hidden="true" tabindex="-1"></a>  <span class="fu">geom_text</span>(<span class="fu">aes</span>(<span class="at">label =</span> Freq), <span class="at">size =</span> <span class="fl">3.5</span>) <span class="sc">+</span></span>
+<span id="cb31-7"><a href="#cb31-7" aria-hidden="true" tabindex="-1"></a>  <span class="fu">scale_fill_gradient</span>(<span class="at">low =</span> <span class="st">"white"</span>, <span class="at">high =</span> <span class="st">"#2c7bb6"</span>) <span class="sc">+</span></span>
+<span id="cb31-8"><a href="#cb31-8" aria-hidden="true" tabindex="-1"></a>  <span class="fu">labs</span>(</span>
+<span id="cb31-9"><a href="#cb31-9" aria-hidden="true" tabindex="-1"></a>    <span class="at">title =</span> <span class="st">"Confusion Matrix – Random Forest (per-point)"</span>,</span>
+<span id="cb31-10"><a href="#cb31-10" aria-hidden="true" tabindex="-1"></a>    <span class="at">x =</span> <span class="st">"True mode"</span>,</span>
+<span id="cb31-11"><a href="#cb31-11" aria-hidden="true" tabindex="-1"></a>    <span class="at">y =</span> <span class="st">"Predicted mode"</span>,</span>
+<span id="cb31-12"><a href="#cb31-12" aria-hidden="true" tabindex="-1"></a>    <span class="at">fill =</span> <span class="st">"Count"</span></span>
+<span id="cb31-13"><a href="#cb31-13" aria-hidden="true" tabindex="-1"></a>  ) <span class="sc">+</span></span>
+<span id="cb31-14"><a href="#cb31-14" aria-hidden="true" tabindex="-1"></a>  <span class="fu">theme_minimal</span>() <span class="sc">+</span></span>
+<span id="cb31-15"><a href="#cb31-15" aria-hidden="true" tabindex="-1"></a>  <span class="fu">theme</span>(<span class="at">axis.text.x =</span> <span class="fu">element_text</span>(<span class="at">angle =</span> <span class="dv">30</span>, <span class="at">hjust =</span> <span class="dv">1</span>))</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 </details>
 <div class="cell-output-display">
 <div class="quarto-figure quarto-figure-center">
@@ -550,22 +648,22 @@ Balanced Accuracy        0.652982      0.8028</code></pre>
 <div class="cell">
 <details class="code-fold">
 <summary>Code</summary>
-<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb28"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb28-1"><a href="#cb28-1" aria-hidden="true" tabindex="-1"></a>imp_df <span class="ot">&lt;-</span> <span class="fu">data.frame</span>(</span>
-<span id="cb28-2"><a href="#cb28-2" aria-hidden="true" tabindex="-1"></a>  <span class="at">feature    =</span> <span class="fu">names</span>(rf_model<span class="sc">$</span>variable.importance),</span>
-<span id="cb28-3"><a href="#cb28-3" aria-hidden="true" tabindex="-1"></a>  <span class="at">importance =</span> rf_model<span class="sc">$</span>variable.importance</span>
-<span id="cb28-4"><a href="#cb28-4" aria-hidden="true" tabindex="-1"></a>) <span class="sc">|&gt;</span></span>
-<span id="cb28-5"><a href="#cb28-5" aria-hidden="true" tabindex="-1"></a>  <span class="fu">arrange</span>(importance)</span>
-<span id="cb28-6"><a href="#cb28-6" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb28-7"><a href="#cb28-7" aria-hidden="true" tabindex="-1"></a>imp_df<span class="sc">$</span>feature <span class="ot">&lt;-</span> <span class="fu">factor</span>(imp_df<span class="sc">$</span>feature, <span class="at">levels =</span> imp_df<span class="sc">$</span>feature)</span>
-<span id="cb28-8"><a href="#cb28-8" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb28-9"><a href="#cb28-9" aria-hidden="true" tabindex="-1"></a><span class="fu">ggplot</span>(imp_df, <span class="fu">aes</span>(<span class="at">x =</span> importance, <span class="at">y =</span> feature)) <span class="sc">+</span></span>
-<span id="cb28-10"><a href="#cb28-10" aria-hidden="true" tabindex="-1"></a>  <span class="fu">geom_col</span>(<span class="at">fill =</span> <span class="st">"#2c7bb6"</span>, <span class="at">alpha =</span> <span class="fl">0.8</span>) <span class="sc">+</span></span>
-<span id="cb28-11"><a href="#cb28-11" aria-hidden="true" tabindex="-1"></a>  <span class="fu">labs</span>(</span>
-<span id="cb28-12"><a href="#cb28-12" aria-hidden="true" tabindex="-1"></a>    <span class="at">title =</span> <span class="st">"Feature importance (Random Forest)"</span>,</span>
-<span id="cb28-13"><a href="#cb28-13" aria-hidden="true" tabindex="-1"></a>    <span class="at">x     =</span> <span class="st">"Mean decrease in node impurity"</span>,</span>
-<span id="cb28-14"><a href="#cb28-14" aria-hidden="true" tabindex="-1"></a>    <span class="at">y     =</span> <span class="cn">NULL</span></span>
-<span id="cb28-15"><a href="#cb28-15" aria-hidden="true" tabindex="-1"></a>  ) <span class="sc">+</span></span>
-<span id="cb28-16"><a href="#cb28-16" aria-hidden="true" tabindex="-1"></a>  <span class="fu">theme_minimal</span>()</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb32"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb32-1"><a href="#cb32-1" aria-hidden="true" tabindex="-1"></a>imp_df <span class="ot">&lt;-</span> <span class="fu">data.frame</span>(</span>
+<span id="cb32-2"><a href="#cb32-2" aria-hidden="true" tabindex="-1"></a>  <span class="at">feature    =</span> <span class="fu">names</span>(rf_model<span class="sc">$</span>variable.importance),</span>
+<span id="cb32-3"><a href="#cb32-3" aria-hidden="true" tabindex="-1"></a>  <span class="at">importance =</span> rf_model<span class="sc">$</span>variable.importance</span>
+<span id="cb32-4"><a href="#cb32-4" aria-hidden="true" tabindex="-1"></a>) <span class="sc">|&gt;</span></span>
+<span id="cb32-5"><a href="#cb32-5" aria-hidden="true" tabindex="-1"></a>  <span class="fu">arrange</span>(importance)</span>
+<span id="cb32-6"><a href="#cb32-6" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb32-7"><a href="#cb32-7" aria-hidden="true" tabindex="-1"></a>imp_df<span class="sc">$</span>feature <span class="ot">&lt;-</span> <span class="fu">factor</span>(imp_df<span class="sc">$</span>feature, <span class="at">levels =</span> imp_df<span class="sc">$</span>feature)</span>
+<span id="cb32-8"><a href="#cb32-8" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb32-9"><a href="#cb32-9" aria-hidden="true" tabindex="-1"></a><span class="fu">ggplot</span>(imp_df, <span class="fu">aes</span>(<span class="at">x =</span> importance, <span class="at">y =</span> feature)) <span class="sc">+</span></span>
+<span id="cb32-10"><a href="#cb32-10" aria-hidden="true" tabindex="-1"></a>  <span class="fu">geom_col</span>(<span class="at">fill =</span> <span class="st">"#2c7bb6"</span>, <span class="at">alpha =</span> <span class="fl">0.8</span>) <span class="sc">+</span></span>
+<span id="cb32-11"><a href="#cb32-11" aria-hidden="true" tabindex="-1"></a>  <span class="fu">labs</span>(</span>
+<span id="cb32-12"><a href="#cb32-12" aria-hidden="true" tabindex="-1"></a>    <span class="at">title =</span> <span class="st">"Feature importance (Random Forest)"</span>,</span>
+<span id="cb32-13"><a href="#cb32-13" aria-hidden="true" tabindex="-1"></a>    <span class="at">x     =</span> <span class="st">"Mean decrease in node impurity"</span>,</span>
+<span id="cb32-14"><a href="#cb32-14" aria-hidden="true" tabindex="-1"></a>    <span class="at">y     =</span> <span class="cn">NULL</span></span>
+<span id="cb32-15"><a href="#cb32-15" aria-hidden="true" tabindex="-1"></a>  ) <span class="sc">+</span></span>
+<span id="cb32-16"><a href="#cb32-16" aria-hidden="true" tabindex="-1"></a>  <span class="fu">theme_minimal</span>()</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 </details>
 <div class="cell-output-display">
 <div class="quarto-figure quarto-figure-center">
@@ -582,29 +680,25 @@ Balanced Accuracy        0.652982      0.8028</code></pre>
 </section>
 <section id="step-6-predict-the-validation-data" class="level2">
 <h2 class="anchored" data-anchor-id="step-6-predict-the-validation-data">Step 6: Predict the Validation Data</h2>
-<p>The validation dataset has no mode labels, so I predict and attach the results. The distribution of predicted modes gives a sanity check — walk should be the most common, subway and train the rarest.</p>
+<p>The validation dataset has no mode labels, so I predict and attach the results. I use the <strong>full imputed validation set</strong> (all 240’449 points) — boundary points where rolling-window features would be NA are filled with training medians, so no point is left without a prediction.</p>
 <div class="cell">
 <details class="code-fold">
 <summary>Code</summary>
-<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb29"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb29-1"><a href="#cb29-1" aria-hidden="true" tabindex="-1"></a>pred_val <span class="ot">&lt;-</span> <span class="fu">predict</span>(rf_model, <span class="at">data =</span> points_validation)<span class="sc">$</span>predictions</span>
-<span id="cb29-2"><a href="#cb29-2" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb29-3"><a href="#cb29-3" aria-hidden="true" tabindex="-1"></a><span class="co"># Attach predictions back to the full validation dataset</span></span>
-<span id="cb29-4"><a href="#cb29-4" aria-hidden="true" tabindex="-1"></a><span class="co"># (Only rows that survived NA removal; track those by row index)</span></span>
-<span id="cb29-5"><a href="#cb29-5" aria-hidden="true" tabindex="-1"></a>points_validation<span class="sc">$</span>prediction <span class="ot">&lt;-</span> pred_val</span>
-<span id="cb29-6"><a href="#cb29-6" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb29-7"><a href="#cb29-7" aria-hidden="true" tabindex="-1"></a><span class="co"># Summary</span></span>
-<span id="cb29-8"><a href="#cb29-8" aria-hidden="true" tabindex="-1"></a>pred_summary <span class="ot">&lt;-</span> <span class="fu">as.data.frame</span>(<span class="fu">table</span>(<span class="at">prediction =</span> points_validation<span class="sc">$</span>prediction)) <span class="sc">|&gt;</span></span>
-<span id="cb29-9"><a href="#cb29-9" aria-hidden="true" tabindex="-1"></a>  <span class="fu">arrange</span>(<span class="fu">desc</span>(Freq))</span>
-<span id="cb29-10"><a href="#cb29-10" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb29-11"><a href="#cb29-11" aria-hidden="true" tabindex="-1"></a>knitr<span class="sc">::</span><span class="fu">kable</span>(</span>
-<span id="cb29-12"><a href="#cb29-12" aria-hidden="true" tabindex="-1"></a>  pred_summary,</span>
-<span id="cb29-13"><a href="#cb29-13" aria-hidden="true" tabindex="-1"></a>  <span class="at">col.names =</span> <span class="fu">c</span>(<span class="st">"Predicted mode"</span>, <span class="st">"Count"</span>),</span>
-<span id="cb29-14"><a href="#cb29-14" aria-hidden="true" tabindex="-1"></a>  <span class="at">caption   =</span> <span class="st">"Distribution of predicted transportation modes in the validation dataset."</span></span>
-<span id="cb29-15"><a href="#cb29-15" aria-hidden="true" tabindex="-1"></a>)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<div class="code-copy-outer-scaffold"><div class="sourceCode cell-code" id="cb33"><pre class="sourceCode r code-with-copy"><code class="sourceCode r"><span id="cb33-1"><a href="#cb33-1" aria-hidden="true" tabindex="-1"></a>pred_val <span class="ot">&lt;-</span> <span class="fu">predict</span>(rf_model, <span class="at">data =</span> points_validation_full)<span class="sc">$</span>predictions</span>
+<span id="cb33-2"><a href="#cb33-2" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb33-3"><a href="#cb33-3" aria-hidden="true" tabindex="-1"></a><span class="co"># Summary</span></span>
+<span id="cb33-4"><a href="#cb33-4" aria-hidden="true" tabindex="-1"></a>pred_summary <span class="ot">&lt;-</span> <span class="fu">as.data.frame</span>(<span class="fu">table</span>(<span class="at">prediction =</span> pred_val)) <span class="sc">|&gt;</span></span>
+<span id="cb33-5"><a href="#cb33-5" aria-hidden="true" tabindex="-1"></a>  <span class="fu">arrange</span>(<span class="fu">desc</span>(Freq))</span>
+<span id="cb33-6"><a href="#cb33-6" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb33-7"><a href="#cb33-7" aria-hidden="true" tabindex="-1"></a>knitr<span class="sc">::</span><span class="fu">kable</span>(</span>
+<span id="cb33-8"><a href="#cb33-8" aria-hidden="true" tabindex="-1"></a>  pred_summary,</span>
+<span id="cb33-9"><a href="#cb33-9" aria-hidden="true" tabindex="-1"></a>  <span class="at">col.names =</span> <span class="fu">c</span>(<span class="st">"Predicted mode"</span>, <span class="st">"Count"</span>),</span>
+<span id="cb33-10"><a href="#cb33-10" aria-hidden="true" tabindex="-1"></a>  <span class="at">caption   =</span> <span class="st">"Distribution of predicted transportation modes in the full validation dataset (all 240'449 points)."</span></span>
+<span id="cb33-11"><a href="#cb33-11" aria-hidden="true" tabindex="-1"></a>)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 </details>
 <div class="cell-output-display">
 <table class="caption-top table table-sm table-striped small">
-<caption>Distribution of predicted transportation modes in the validation dataset.</caption>
+<caption>Distribution of predicted transportation modes in the full validation dataset (all 240’449 points).</caption>
 <thead>
 <tr class="header">
 <th style="text-align: left;">Predicted mode</th>
@@ -614,27 +708,27 @@ Balanced Accuracy        0.652982      0.8028</code></pre>
 <tbody>
 <tr class="odd">
 <td style="text-align: left;">walk</td>
-<td style="text-align: right;">71513</td>
+<td style="text-align: right;">123236</td>
 </tr>
 <tr class="even">
 <td style="text-align: left;">bus</td>
-<td style="text-align: right;">52256</td>
+<td style="text-align: right;">55568</td>
 </tr>
 <tr class="odd">
 <td style="text-align: left;">bike</td>
-<td style="text-align: right;">34378</td>
+<td style="text-align: right;">39782</td>
 </tr>
 <tr class="even">
 <td style="text-align: left;">car</td>
-<td style="text-align: right;">15059</td>
+<td style="text-align: right;">16925</td>
 </tr>
 <tr class="odd">
 <td style="text-align: left;">subway</td>
-<td style="text-align: right;">4421</td>
+<td style="text-align: right;">4527</td>
 </tr>
 <tr class="even">
 <td style="text-align: left;">train</td>
-<td style="text-align: right;">407</td>
+<td style="text-align: right;">411</td>
 </tr>
 </tbody>
 </table>
@@ -644,10 +738,11 @@ Balanced Accuracy        0.652982      0.8028</code></pre>
 </section>
 <section id="discussion" class="level2">
 <h2 class="anchored" data-anchor-id="discussion">Discussion</h2>
-<p>The Random Forest model reaches an overall accuracy of <strong>61.7 %</strong> on the per-point testing data. At first glance that might seem disappointing compared to the ~69 % the CART baseline achieved in the Advanced Environmental Statistics assignment — but the comparison isn’t fair. The CART was predicting one label per <em>segment</em> using aggregated features (mean, max, min), which is a much easier task. Here every single GPS point gets its own prediction from raw local features, with no smoothing over a whole trajectory. The fact that we get to 62 % on that harder setup feels reasonable.</p>
+<p>The Random Forest model reaches an overall accuracy of <strong>61.7 %</strong> on the per-point testing data, compared to <strong>54.2 %</strong> for the single CART on the same task (see comparison table). Both are below the ~69 % the CART baseline achieved in the Advanced Environmental Statistics assignment — but that comparison isn’t fair. The AES CART predicted one label per <em>segment</em> using aggregated features (mean, max, min), which is a much easier task. Here every single GPS point gets its own prediction from raw local features, with no smoothing over a whole trajectory. The Random Forest’s advantage over the single tree is most visible for rare classes like <code>train</code> and <code>subway</code>, where the ensemble averaging stabilises predictions that a single tree gets wrong.</p>
 <p>The model struggles most with <strong>bus vs.&nbsp;car</strong> and <strong>subway vs.&nbsp;train</strong>, which is visible in the confusion matrix. That’s not particularly surprising: from a kinematics perspective, sitting in a bus and sitting in a car feel almost identical. Both move at similar speeds along roads, neither produces a distinctive turning-angle signature, and the stops of a bus are too brief to register clearly in a 5–10 point sinuosity window. Distinguishing them properly would require context — road network type, stop frequency, distance to rail — which is exactly what the upcoming CMA2 lecture on context-aware movement analysis addresses.</p>
 <p>Walking is the best-predicted class with a sensitivity of ~81 %, while cycling reaches ~63 %. The gap between them reflects the value of adding turning angle and dual-window sinuosity on top of speed — pedestrians genuinely do take more winding paths and change direction more often than cyclists, and those features capture that difference.</p>
-<p>The OOB training error of ~34.5 % is a few points better than the ~38.3 % test error, which means the model generalises reasonably — it’s not dramatically overfitting. The main weak point is the rare classes: train has a sensitivity of only 31 % because it’s so underrepresented in training. Giving those classes higher weight or using oversampling (SMOTE) would be a logical next step to improve those specific predictions.</p>
+<p>The OOB training error of ~34.5 % is a few points better than the ~38.3 % test error, which means the model generalises reasonably — it’s not dramatically overfitting. The main weak point is the rare classes: train has a sensitivity of only 31 % because it’s so underrepresented in training. Giving those classes higher weight or using oversampling (SMOTE) would be a logical next step.</p>
+<p>For the final validation predictions, boundary points where rolling-window features (sinuosity, acceleration) were undefined due to segment edges are imputed with training medians. This ensures all 240’449 validation points receive a prediction rather than being silently dropped.</p>
 <hr>
 </section>
 <section id="references" class="level2">
@@ -736,7 +831,7 @@ Balanced Accuracy        0.652982      0.8028</code></pre>
     }
       var localhostRegex = new RegExp(/^(?:http|https):\/\/localhost\:?[0-9]*\//);
       var mailtoRegex = new RegExp(/^mailto:/);
-        var filterRegex = new RegExp('/' + window.location.host + '/');
+        var filterRegex = new RegExp("https:\/\/spatiotemporal-lab\.github\.io\/movementanalysis-deepdive\/");
       var isInternal = (href) => {
           return filterRegex.test(href) || localhostRegex.test(href) || mailtoRegex.test(href);
       }
